@@ -38,7 +38,6 @@ process prefetch_from_SRA {
 
    input:
    tuple val( id ), val( sra_run_id )
-   secret 'NCBI_API_KEY'
 
    output:
    tuple val( id ), path( "${sra_run_id}/" )
