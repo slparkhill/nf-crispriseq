@@ -68,7 +68,6 @@ process download_FASTQ_from_SRA {
 
    input:
    tuple val( id ), path( sra_run_id )
-   secret 'NCBI_API_KEY'
 
    output:
    tuple val( id ), path( "fastq/${sra_run_id}_R{1,2}.fastq.gz" )
