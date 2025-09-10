@@ -1,7 +1,10 @@
 .nextflow*
-work/
-outputs/
-/test/*.html
+/work/
+/.singularity/
+/.docker/
+/.conda/
+/test/*/outputs/
+/test/*/work/
 /test/local/
 ~$*.xlsx
 *.html
