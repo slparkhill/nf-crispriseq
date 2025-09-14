@@ -7,6 +7,7 @@ channels:
 dependencies:
     - python=3.12
     - pip
+    - bioconda::eggnog-mapper>=2.1.13
     - bioconda::fastqc
     - bioconda::perl-uri
     - bioconda::seqtk
@@ -19,5 +20,4 @@ dependencies:
         - "git+https://github.com/scbirlab/crispio.git@fitness#egg=crispio[fit_cuda_local]"
         - 'carabiner-tools[mpl,pd]>=0.0.4'
         - 'cutadapt>=5.0'
-        - 'eggnog-mapper>=2.1.13'
         - 'multiqc>=1.27'
