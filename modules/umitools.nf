@@ -1,3 +1,48 @@
+// Identify clone barcodes
+process UMItools_whitelist {
+
+   label 'big_mem'
+   time '24h'
+
+   tag "${sample_id}"
+
+   publishDir( 
+      "${params.outputs}/clone-barcodes", 
+      mode: 'copy',
+      // pattern: "*.whitelist.log", 
+   )
+
+   input:
+   tuple val( id ), path( reads ), val( umis )
+   val error_threshold
+
+   output:
+   tuple val( id ), path( "*.txt" ), emit: main
+   tuple val( id ), path( "*.png" ), emit: plots
+   path "*.log", emit: logs
+
+   script:
+   def second_reads  = ( 
+      reads[1]
+      ? "--bc-pattern2 '${umis[1]}' --read2-in '${reads[1]}'"
+      : "" 
+   )
+   """
+   umi_tools whitelist \
+      --knee-method distance \
+      --method umis \
+		--bc-pattern '${umis[0]}' ${second_reads} \
+      --extract-method regex \
+      --error-correct-threshold ${error_threshold} \
+      --ed-above-threshold correct \
+      --plot-prefix "${id}.whitelist" \
+		--log "${id}.whitelist.log" \
+		--stdin "${reads[0]}" \
+      --stdout "${id}.whitelist.txt"
+   """
+}
+
+
 /*
  * Extract cell barcodes and UMIs
  */
@@ -18,27 +63,29 @@ process UMItools_extract {
 
    input:
    tuple val( id ), path( reads ), val( umis ), path( whitelist )
+   val trim_qual
+   val use_whitelist
 
    output:
    tuple val( id ), path( "*.extracted.fastq.gz" ), emit: main
    path "*.log", emit: logs
 
    script:
-   def error_correct = ( params.allow_cell_errors ? "--error-correct-cell" : "" )
    def second_reads  = ( 
       reads[1]
-      ? "--bc-pattern '${umis[0]}' --bc-pattern2 '${umis[1]}' --read2-in '${reads[1]}' --read2-out '${id}'_R2.extracted0.fastq.gz"
-      : "--bc-pattern '${umis}'" 
+      ? "--bc-pattern2 '${umis[1]}' --read2-in '${reads[1]}' --read2-out '${id}'_R2.extracted0.fastq.gz"
+      : "" 
    )
+   def wl_flag = ( use_whitelist ? "--whitelist ${whitelist}" : "" )
    """
-   zcat "${whitelist}" > wl.txt
    umi_tools extract \
-      --extract-method regex ${error_correct} \
+      --extract-method regex \
+      --quality-filter-mask ${trim_qual} \
       --quality-encoding phred33 \
-      --whitelist "wl.txt" \
-      --log "${id}.${whitelist.baseName}.extract.log" \
+      --bc-pattern '${umis[0]}' \
+      --log "${id}.extract.log" \
       --stdin "${reads[0]}" \
-      --stdout "${id}"_R1.extracted0.fastq.gz ${second_reads}
+      --stdout "${id}_R1.extracted0.fastq.gz" ${second_reads} ${wl_flag}
 
    # make sure no 0-length reads
    for f in "${id}"_R?.extracted0.fastq.gz
@@ -46,17 +93,18 @@ process UMItools_extract {
       zcat \$f \
       | awk \
          '
-         NR % 4 == 1 { name = \$0 } 
-         NR % 4 == 2 { if (length(\$0) > 0) { seq = \$0 } else { seq = "N" } } 
-         NR % 4 == 0 { if (length(\$0) > 0) { qual = \$0 } else { qual = "?" } } 
-         ( NR > 1 && NR%4 == 1 ) { print name ORS seq ORS "+" ORS qual } 
-         END { print name ORS seq ORS "+" ORS qual }
+         NR % 4 == 1 { name = \$0; next } 
+         NR % 4 == 2 { if (length(\$0) > 0) { seq = \$0 } else { seq = "N" }; next } 
+         NR % 4 == 0 { 
+            if (length(\$0) > 0) { qual = \$0 } else { qual = "?" }; 
+            print name ORS seq ORS "+" ORS qual 
+         } 
          ' \
       | pigz -v --stdout -p ${task.cpus} \
-      > \$(basename \$f .fastq.gz).extracted.fastq.gz
+      > \$(basename \$f .extracted0.fastq.gz).extracted.fastq.gz
    done
 
-   rm "${id}"_R?.extracted0.fastq.gz
+   #rm "${id}"_R?.extracted0.fastq.gz
 
    """
 }
@@ -92,53 +140,36 @@ process concat_extractions {
 
 }
 
-/*
- * Count unique UMIs per cell per gene
- */
-process UMItools_count {
+process fastq2tab {
 
-   tag "${sample_id}"
-
-   // errorStrategy 'retry'
-   // maxRetries 2
+   tag "${id}"
 
    publishDir( 
-      "${params.outputs}/counts", 
-      mode: 'copy',
-      saveAs: { "${id}-${it}" }, 
-   )
+        "${params.outputs}/counts", 
+        mode: 'copy',
+        saveAs: { "${id}.${it}" },
+    )
 
    input:
-   tuple val( sample_id ), path( bamfile )
-   val paired
+   tuple val( id ), path( fastqs )
 
    output:
-   tuple val( sample_id ), path( "*.tsv" ), emit: main
-   path( "*.log" ), emit: logs
+   tuple val( id ), path( "tab.tsv" )
 
    script:
    """
-   samtools sort ${bamfile} -o ${bamfile.getBaseName()}.sorted.bam
-   samtools index ${bamfile.getBaseName()}.sorted.bam
-   umi_tools count \
-		--per-gene ${paired ? '--paired --chimeric-pairs discard --unpaired-reads discard' : ''} \
-      --per-cell \
-		--gene-tag XT \
-      --log ${sample_id}.count.log \
-		--stdin ${bamfile.getBaseName()}.sorted.bam \
-      --stdout ${sample_id}.umitools_count.tsv \
-   && rm ${bamfile.getBaseName()}.sorted.bam
+   zcat "${fastqs[0]}" \
+   | awk -F' ' -v OFS='\\t' \
+      '(NR + 3) % 4 == 0 { print \$1, \$2 }' \
+   | sort -k2 \
+   > tab.tsv
 
    """
 }
 
-// Count unique UMIs per cell per gene
-process UMItools_count_tab {
+process count_tab {
 
    tag "${id}"
-
-   label 'big_mem'
-   time '48h'
 
    publishDir( 
       "${params.outputs}/counts", 
@@ -150,41 +181,97 @@ process UMItools_count_tab {
    tuple val( id ), path( tabfile )
 
    output:
-   tuple val( id ), path( "${id}.umitools_count.tsv" ), emit: main
-   tuple val( id ), path( "${id}.umitools_count.log" ), emit: logs
+   tuple val( id ), path( "read_count.tsv" )
 
    script:
    """
+   cut -f2 "${tabfile}" \
+   | sort \
+   | uniq -c \
+   | awk -F' ' -v OFS='\\t' -v id="${id}" '
+      BEGIN { print "sample_id", "guide_name", "read_count" }
+      { print id, \$2, \$1 }
+   ' \
+   > read_count.tsv
+
+   """
+}
+
+
+// Count unique UMIs per cell per gene
+process UMItools_count_tab {
+
+   tag "${id}"
+
+   label 'big_mem'
+
+   publishDir( 
+      "${params.outputs}/counts", 
+      mode: 'copy',
+      saveAs: { "${id}-${it}" },
+   )
+
+   input:
+   tuple val( id ), path( tabfile )
+   val umi_method
+   val per_clone
+
+   output:
+   tuple val( id ), path( "${id}.umitools_count.tsv" ), emit: main
+   path "${id}.umitools_count.log", emit: logs
+
+   script:
+   """
+   export MPLCONFIGDIR=tmp
+   mkdir \$MPLCONFIGDIR
+
    umi_tools count_tab \
-      --method unique \
+      --method ${umi_method} ${per_clone ? "--per-cell" : ""} \
 		--stdin "${tabfile}" \
       --stdout umitools_count0.tsv \
       --log "${id}.umitools_count.log"
 
-   awk -v OFS='\\t' -v id="${id}" \
-      BEGIN { print "guide_name", "umi_count", "sample_id" }
-      NR > 1 { \$1 = \$1; print \$0, id }
+   awk -v OFS='\\t' -v id="${id}" '
+      BEGIN { print "sample_id", "guide_name", "umi_count" }
+      NR > 1 { \$1 = \$1; print id, \$0 }
    ' umitools_count0.tsv \
-   | sort -k1 \
-   > umitools_count-a.tsv
+   > "${id}.umitools_count.tsv"
 
-   cut -f2 "${tabfile}" > read_count0.tsv
+   """
+}
 
-   printf 'guide_name\\tread_count\\n' \
-      > read_count.tsv
-   sort read_count0.tsv \
-      | uniq -c \
-      | awk -F' ' -v OFS='\\t' \
-         '{ print \$2, \$1 }' \
-      | sort -k1 \
-      >> read_count.tsv
 
-   join --header umitools_count-a.tsv read_count.tsv \
-      | awk -F' ' -v OFS='\\t' \
-         '{ print \$3, \$1, \$2, \$4 }' \
-      > "${id}.umitools_count.tsv"
+process join_umi_and_read_counts {
 
-   rm read_count0.tsv
+   tag "${id}"
+
+   publishDir( 
+      "${params.outputs}/counts", 
+      mode: 'copy',
+      saveAs: { "${id}-${it}" },
+   )
+
+   input:
+   tuple val( id ), path( umi_count ), path( read_count )
+
+   output:
+   tuple val( id ), path( "${id}.umi+read_count.tsv" )
+
+   script:
+   """
+   #!/usr/bin/env python
+
+   import pandas as pd
+
+   (
+      pd.read_csv("${read_count}", sep="\\t")
+      .merge(
+         pd.read_csv("${umi_count}", sep="\\t"),
+         how="outer",
+      )
+      .fillna(0)
+      .to_csv("${id}.umi+read_count.tsv", sep="\\t", index=False)
+   )
 
    """
 }

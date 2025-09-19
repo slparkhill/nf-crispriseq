@@ -1,27 +1,27 @@
 // Do quality control checks
 process fastQC {
 
-   tag "${sample_id}"
-   label 'big_cpu'
+   tag "${id}"
+   label 'big_mem'
    
    input:
-   tuple val( sample_id ), path ( reads )
+   tuple val( id ), path ( reads )
 
    output:
-   tuple val( sample_id ), path ( "*.zip" ), emit: logs
-   path "*.zip", emit: multiqc_logs
+   tuple val( id ), path ( "*.zip" ), emit: main
+   path "*.zip", emit: logs
 
    script:
    """
-   zcat ${reads} > ${sample_id}.fastq
-   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
-   rm ${sample_id}.fastq
+   zcat ${reads} > "${id}.fastq"
+   fastqc --noextract --memory 10000 --threads ${task.cpus} "${id}.fastq"
+   rm "${id}.fastq"
    """
    stub:
    """
-   zcat ${reads} | head -n1000 > ${sample_id}.fastq
-   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
-   rm ${sample_id}.fastq
+   zcat ${reads} | head -n1000 > "${id}.fastq"
+   fastqc --noextract --memory 10000 --threads ${task.cpus} "${id}.fastq"
+   rm "${id}.fastq"
    """
 
 }

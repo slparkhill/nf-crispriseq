@@ -18,10 +18,11 @@ process trim_using_cutadapt {
    tuple val( id ), path( reads, stageAs: "???/*" ), val( adapters5 ), val( adapters3 )
    val trim_qual 
    val min_length
+   val retain_5prime
 
    output:
    tuple val( id ), path( "*.with-adapters.fastq.gz" ), emit: main
-   tuple val( id ), path( "*.log" ), emit: logs
+   path "*.log", emit: logs
 
    script:
    def adapter_3prime_R = (adapters3[1] ? "-A '${adapters3[1]}'" : "")
@@ -32,13 +33,13 @@ process trim_using_cutadapt {
    do
       if ls */*_R"\$i"*.fastq.gz 1> /dev/null 2>&1
       then
-         cat */*_R"\$i"*.fastq.gz > ${id}_3p_R"\$i".fastq.gz
+         cat */*_R"\$i"*.fastq.gz > "${id}_3p_R\$i.fastq.gz"
       fi
    done
 
    if [ -z "${id}_3p_R2.fastq.gz" ]
    then
-      SECOND_FILE_FLAGS='-p ${id}_5p_R2.fastq.gz ${adapter_3prime_R}'
+      SECOND_FILE_FLAGS='-p "${id}_5p_R2.fastq.gz" ${adapter_3prime_R}'
    else
       SECOND_FILE_FLAGS=
    fi
@@ -52,9 +53,9 @@ process trim_using_cutadapt {
       --action trim \
       --discard-untrimmed \
       -j ${task.cpus} \
-		-o ${id}_5p_R1.fastq.gz \$SECOND_FILE_FLAGS \
-		${id}_3p_R?.fastq.gz \
-   > ${id}.3p.cutadapt.log
+		-o "${id}_5p_R1.fastq.gz" \$SECOND_FILE_FLAGS \
+		"${id}"_3p_R?.fastq.gz \
+   > "${id}.3p.cutadapt.log"
 
    ADAPT5_ALL="${adapter_5prime_F}${adapter_5prime_R}"
    ADAPT5_LEN=\${#ADAPT5_ALL}
@@ -62,7 +63,7 @@ process trim_using_cutadapt {
    then
       if [ -z "${id}_5p_R2.fastq.gz" ]
       then
-         SECOND_FILE_FLAGS='-p ${id}_R2.with-adapters.fastq.gz ${adapter_5prime_R}'
+         SECOND_FILE_FLAGS='-p "${id}_R2.with-adapters.fastq.gz" ${adapter_5prime_R}'
       else
          SECOND_FILE_FLAGS=
       fi
@@ -70,23 +71,24 @@ process trim_using_cutadapt {
          ${adapter_5prime_F} \
          --no-indels \
          --report full \
-         --action retain \
+         --action ${retain_5prime ? "retain" : "trim"} \
          --discard-untrimmed \
          --minimum-length ${min_length} \
          -j ${task.cpus} \
-         -o ${id}_R1.with-adapters.fastq.gz \$SECOND_FILE_FLAGS \
-         ${id}_5p_R?.fastq.gz > ${id}.5p.cutadapt.log
+         -o "${id}_R1.with-adapters.fastq.gz" \$SECOND_FILE_FLAGS \
+         "${id}"_5p_R?.fastq.gz \
+         > "${id}.5p.cutadapt.log"
    else
       for i in \$(seq 1 2)
       do
-         if [ -z ${id}_5p_R\$i.fastq.gz ]
+         if [ -z "${id}_5p_R\$i.fastq.gz" ]
          then
-            mv ${id}_5p_R\$i.fastq.gz ${id}_R\$i.with-adapters.fastq.gz
+            mv "${id}_5p_R\$i.fastq.gz" "${id}_R\$i.with-adapters.fastq.gz"
          fi
       done
    fi
 
-   rm ${id}_{5,3}p_R?.fastq.gz
+   rm "${id}"_{5,3}p_R?.fastq.gz
    """
 }
 

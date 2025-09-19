@@ -3,16 +3,13 @@
  */
 process multiQC {
 
-   errorStrategy 'retry'
-   maxRetries 2
-
    publishDir( 
       "${params.outputs}/multiqc", 
       mode: 'copy',
    )
 
    input:
-   path( '*', stageAs: '?/*' )
+   path( '*', stageAs: '??/*' )
 
    output:
    tuple path( "*.html" ), path( "multiqc_data" )

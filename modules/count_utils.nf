@@ -1,3 +1,66 @@
+process reads_per_umi {
+
+   tag "${id}"
+
+   publishDir( 
+        "${params.outputs}/counts", 
+        mode: 'copy',
+        saveAs: { "${id}.${it}" },
+    )
+
+   input:
+   tuple val( id ), path( tabfile )
+
+   output:
+   tuple val( id ), path( "umi.tsv" )
+
+   script:
+   """
+   cut -f1 "${tabfile}" \
+   | cut -d _ -f2 \
+   | uniq -c \
+   | awk -F' ' -v OFS='\\t' -v bname="umi" -v id="${id}" '
+      BEGIN { print "sample_id", bname, bname "_read_count" } 
+      { print id, \$2, \$1 }
+   ' \
+   > umi.tsv
+
+   """
+}
+
+
+process reads_per_guide {
+
+   tag "${id}"
+
+   publishDir( 
+        "${params.outputs}/counts", 
+        mode: 'copy',
+        saveAs: { "${id}.${it}" },
+    )
+
+   input:
+   tuple val( id ), path( tabfile )
+
+   output:
+   tuple val( id ), path( "guide_name.tsv" )
+
+   script:
+   """
+   cut -f2 "${tabfile}" \
+   | cut -d _ -f2 \
+   | uniq -c \
+   | awk -F' ' -v OFS='\\t' -v bname="umi" '
+      BEGIN { print "sample_id", bname, bname "_read_count" } 
+      { print "${id}", \$2, \$1 }
+   ' \
+   > guide_name.tsv
+
+   """
+}
+
+
+
 process join_featurecounts_UMItools {
 
    tag "${id}"
@@ -33,7 +96,7 @@ process join_featurecounts_UMItools {
    grep -v '^#' "${featurecounts_table}" | tr \$'\\t' , > "featurecounts-table0.csv"
    LOCUS_TAG_COL=\$(get_col_number "Geneid" < "featurecounts-table0.csv")
    # rename header, add locus tag column, and sort
-   sed 's/,${id}.*\\.umicollapse\\.bam\$/,bulk_read_count/' \
+   sed 's/,'"${id}"'.*\\.umicollapse\\.bam\$/,bulk_read_count/' \
       "featurecounts-table0.csv" \
    | awk -F, -v OFS=, \
       -v locus_col="\$LOCUS_TAG_COL" -v sample_id="${id}" \
@@ -41,7 +104,7 @@ process join_featurecounts_UMItools {
    | sort_table \
    > "featurecounts-table.csv"
 
-   cat ${umitools_table} | tr \$'\\t' , > "umitools-table0.csv"
+   cat "${umitools_table}" | tr \$'\\t' , > "umitools-table0.csv"
    sed 's/,count\$/,umi_count/;s/^gene,/gene_id,/;s/,cell,/,cell_barcode,/' \
       "umitools-table0.csv" \
    | sort_table \

@@ -21,29 +21,29 @@ process table2fasta {
    if ( table.getExtension() == "csv" )
       """
       bioino table2fasta "${table}" \
-         --sequence ${sequence_column} \
+         --sequence "${sequence_column}" \
          --format CSV \
-         --name ${name_column} \
+         --name "${name_column}" \
          --output to-map.fasta
       """
    else
       """
-      cp ${table} to-map.fasta
+      cp "${table}" to-map.fasta
       """
 
    stub:
    if ( table.getExtension() == "csv" )
       """
-      head -n20 "${table}" > in.csv
+      head -n2000 "${table}" > in.csv
       bioino table2fasta in.csv \
-         --sequence ${sequence_column} \
+         --sequence "${sequence_column}" \
          --format CSV \
-         --name ${name_column} \
+         --name "${name_column}" \
          --output to-map.fasta
       """
    else
       """
-      head -n20 "${table}" > to-map.fasta
+      head -n2000 "${table}" > to-map.fasta
       """
 }
 

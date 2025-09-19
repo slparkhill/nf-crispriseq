@@ -3,11 +3,18 @@ process fetch_genome_from_NCBI {
    tag "${accession}"
    label 'some_mem'
 
+   publishDir( 
+      "${params.outputs}/genome", 
+      mode: 'copy',
+      saveAs: { "${id}.${it}" },
+   )
+
    input:
    val accession
+   val include_proteins
 
    output:
-   tuple val( accession ), path( "all-nucleotides.fna" ), path( "all-annotations.gff" )
+   tuple val( accession ), path( "all-{nucleotides.fna,proteins.faa}" ), path( "all-annotations.gff" )
 
    script:
    """
@@ -15,18 +22,25 @@ process fetch_genome_from_NCBI {
    ACCESSIONS=\$(echo "${accession}" | tr '+' ' ')
    echo "\$ACCESSIONS"
    WEB_ROOT="https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession"
-   WEB_TAIL="download?include_annotation_type=GENOME_FASTA&include_annotation_type=GENOME_GFF&hydrated=FULLY_HYDRATED"
+   WEB_TAIL="download?include_annotation_type=GENOME_FASTA&include_annotation_type=GENOME_GFF&${include_proteins ? "include_annotation_type=PROT_FASTA&" : "" }hydrated=FULLY_HYDRATED"
    for acc in \$ACCESSIONS
    do
       curl -v "\$WEB_ROOT/\$acc/\$WEB_TAIL" \
          -o \$acc"_genome-out"
-      unzip -o \$acc"_genome-out" "ncbi_dataset/data/\$acc/"{"\$acc"_*_genomic.fna,*.gff}
-      mv ncbi_dataset/data/*/"\$acc"_*_genomic.fna \$acc.fna
-      mv ncbi_dataset/data/*/*.gff \$acc.gff
+      unzip -o \$acc"_genome-out" "ncbi_dataset/data/\$acc/"{"\$acc"_*_genomic.fna${include_proteins ? ',protein.faa' : "" },genomic.gff}
+      mv ncbi_dataset/data/"\$acc"/"\$acc"_*_genomic.fna "\$acc.fna"
+      ${include_proteins ? 'mv ncbi_dataset/data/"\$acc"/protein.faa "\$acc.faa"' : "" }
+      mv ncbi_dataset/data/"\$acc"/genomic.gff "\$acc.gff"
    done
 
    cat *.fna > all-nucleotides.fna
    cat *.gff > all-annotations.gff
+
+   if ls *.faa > /dev/null 2>&1
+   then
+      cat *.faa > all-proteins.faa
+   fi
+
    """
 }
 
