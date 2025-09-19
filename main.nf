@@ -2,7 +2,7 @@
 
 /*
 ========================================================================================
-   INSPECT Workflow
+   CRISPRi-seq Workflow
 ========================================================================================
    Github   : https://github.com/scbirlab/nf-crispriseq
    Contact  : Eachan Johnson <eachan.johnson@crick.ac.uk>
@@ -13,8 +13,7 @@ nextflow.enable.dsl=2
 pipeline_title = """\
    S C B I R   C R I S P R i   P O O L E D   F I T N E S S   P I P E L I N E
    =========================================================================
-   Nextflow pipeline to count guides from SRA files and calculate
-         fitness changes.
+   Nextflow pipeline to count guides from SRA files and calculate fitness changes.
    """
    .stripIndent()
 
@@ -103,9 +102,21 @@ include {
    map_guides_to_genome_features;
 } from './modules/crispio.nf'
 include { 
+   reads_per_guide;
+   reads_per_umi;
+} from './modules/count_utils.nf'
+include { 
    anchor_sequences; 
    count_guides_with_cutadapt;
 } from './modules/demux.nf'
+include { 
+   download_eggnog_databases;
+   get_functional_sets_with_eggnog;
+} from './modules/eggnog.nf'
+include { 
+   calculate_relative_fitness;
+   stack_tables;
+} from './modules/fitness.nf'
 include { multiQC } from './modules/multiqc.nf'
 include { 
    fetch_genome_from_NCBI; 
@@ -113,7 +124,7 @@ include {
    download_FASTQ_from_SRA;
 } from './modules/ncbi.nf'
 include { 
-   plot_UMI_distributions;
+   plot_count_distributions;
 } from './modules/plots.nf'
 include { fastQC } from './modules/qc.nf'
 include { 
@@ -123,6 +134,9 @@ include {
    trim_using_cutadapt; 
 } from './modules/trimming.nf'
 include { 
+   fastq2tab;
+   count_tab;
+   join_umi_and_read_counts;
    UMItools_count_tab;
    UMItools_extract;
 } from './modules/umitools.nf'
@@ -137,8 +151,8 @@ workflow {
       .set { csv_ch }
 
    csv_ch
-      .map { tuple( 
-         it.sample_id,
+      .map { tuple(
+         it.sample_id, //[expt: it.expt_id, sample: it.sample_id],
          tuple( it.adapter_read1_5prime, it.adapter_read2_5prime ),
          tuple( it.adapter_read1_3prime, it.adapter_read2_3prime ),
       ) }
@@ -146,16 +160,24 @@ workflow {
       .set { adapter_ch }  // sample_name, [adapt5], [adapt3]
 
    csv_ch
-      .map { tuple( 
+      .map { tuple(
          it.sample_id,
-         tuple( it.umi_pattern )
+         it.expt_id, 
+      ) }
+      .unique()
+      .set { sample2expt }  // sample_name, expt_id
+
+   csv_ch
+      .map { tuple( 
+         it.sample_id, //[expt: it.expt_id, sample: it.sample_id],
+         tuple( it.umi_read1, it.umi_read2 ),
       ) }
       .unique()
       .set { umi_ch }  // sample_id, [umis]
 
    csv_ch
       .map { tuple( 
-         it.sample_id,
+         it.sample_id, //[expt: it.expt_id, sample: it.sample_id],
          it.genome,
          it.pam,
          it.scaffold,
@@ -164,26 +186,36 @@ workflow {
       .set { genome_pam_ch }
 
    if ( params.from_sra ) {
+
       csv_ch
-         .map { tuple( it.sample_id, it.Run ) }
+         .map { tuple( 
+            it.sample_id, //[expt: it.expt_id, sample: it.sample_id], 
+            it.Run,
+         ) }
          | prefetch_from_SRA
          | download_FASTQ_from_SRA
       download_FASTQ_from_SRA.out
          .transpose()
          .groupTuple( by: 0 )
          .set { reads_ch }  // sample_id, [reads]
+
    } 
    
    else {
+
       csv_ch
          .map { tuple( 
-            it.sample_id,
+            it.sample_id, //[expt: it.expt_id, sample: it.sample_id],
             file( 
-               "${params.fastq_dir}/*${it.fastq_pattern}*",
+               "${params.fastq_dir}/*${it.reads}*",
                checkIfExists: true
             ).sort()
          ) }
+         .unique()
+         .transpose()
+         .groupTuple( by: 0 )
          .set { reads_ch }  // sample_id, [reads]
+
    }
 
    /*
@@ -195,20 +227,36 @@ workflow {
 
    reads_ch | fastQC
 
-   genome_pam_ch
-      .map { it[1] }  // genome_acc
-      .unique()
-      | fetch_genome_from_NCBI   // genome_acc, genome, gff
+   fetch_genome_from_NCBI(
+      genome_pam_ch
+         .map { it[1] }  // genome_acc
+         .unique(),
+      Channel.value( true ), // include protein FASTA for eggNOG
+   )
+
+   Channel.of( params.eggnog_url ) 
+      | download_eggnog_databases
+   fetch_genome_from_NCBI.out
+      .map { tuple( it[0], it[1][1], it[2] ) }
+      .combine( download_eggnog_databases.out ) 
+      | get_functional_sets_with_eggnog
+
+   fetch_genome_from_NCBI.out
+      .map { tuple( it[0], it[1][0] ) }
+      .combine( get_functional_sets_with_eggnog.out.gff, by: 0 )
+      .set { genome_info }
    
    trim_using_cutadapt(
       reads_ch.combine( adapter_ch, by: 0 ),  // sample_id, [reads], [adapt5], [adapt3]
       Channel.value( params.trim_qual ), 
       Channel.value( params.min_length ),
+      Channel.value( params.retain_5prime ),
    )  // sample_id, [reads]
    trim_using_cutadapt.out.main.set { trimmed }
    trim_using_cutadapt.out.logs.set { trim_logs }
    
    if ( params.guides ) {
+
       csv_ch
          .map { tuple( 
             it.sample_id, 
@@ -231,15 +279,20 @@ workflow {
 
       guide_csv
          .map { it[1..0] }  // guide_filename, sample_id
+         .unique()
          .combine( table2fasta.out, by: 0 )  // guide_filename, sample_id, guide_fasta
-         .map { it[1..-1] }  // sample_id, guide_fasta      
+         .map { it[1..-1] }  // sample_id, guide_fasta
+         .unique()     
          .set { guide_fasta0 }
 
       guide_fasta0
          .combine( genome_pam_ch, by: 0 )  // sample_id, guide_fasta, genome_acc, pam, scaffold
          .map { it[2..4] + [ it[1] ] }  // genome_acc, pam, scaffold, guide_fasta
          .unique()
-         .combine( fetch_genome_from_NCBI.out, by: 0)  // genome_acc, pam, scaffold, guide_fasta, genome_fasta, genome_gff
+         .combine( 
+            genome_info, 
+            by: 0,
+         )  // genome_acc, pam, scaffold, guide_fasta, genome_fasta, genome_gff
          | map_guides_to_genome_features
       map_guides_to_genome_features.out.main
          .set { guide_gff }  // genome_acc, pam, guide_gff
@@ -249,7 +302,10 @@ workflow {
       genome_pam_ch
          .map { it[1..-1] }  // genome_acc, pam, scaffold
          .unique()
-         .combine( fetch_genome_from_NCBI.out, by: 0 )  // genome_acc, pam, genome_fasta, genome_gff
+         .combine( 
+            genome_info, 
+            by: 0,
+         )  // genome_acc, pam, genome_fasta, genome_gff
          .combine( Channel.of( params.guide_length ) )  // genome_acc, pam, genome_fasta, genome_gff, guide_length
          | design_guides_with_crispio
       design_guides_with_crispio.out.main
@@ -257,15 +313,11 @@ workflow {
 
    }
 
-   gff2table(
-      guide_gff
-         .map { tuple( [id: it[0], pam: it[1]], it[2] ) },
-      // Channel.value( "guide_sequence" ),
-      // Channel.value( params.guide_name ),
-   )
-   gff2table.out
-      .map { tuple( it[0].id, it[0].pam, it[1] ) }
-      .set { gff_table }
+   guide_gff
+      .map { tuple( [id: it[0], pam: it[1]], it[2] ) }
+      | gff2table
+      | map { tuple( it[0].id, it[0].pam, it[1] ) }
+      | set { gff_table }
 
    if ( ! params.guides ) {
 
@@ -285,24 +337,25 @@ workflow {
          .combine( 
             genome_pam_ch
                .map { it[1..2] + [ it[0] ] },  // genome_acc, pam, sample_id
-            by: [0, 1] 
+            by: [0, 1],
          )  // genome_acc, pam, guide_fasta, sample_id
          .map { it[-1..-2] }  // sample_id, guide_fasta
+         .unique()
          .set { guide_fasta0 }
-
    }
 
    if ( params.rc ) {  // reverse complement
 
       guide_fasta0
-         .map { tuple( it[1].name, it[1] ) }
+         .map { tuple( it[1], it[1] ) }
          .unique()
          | reverse_complement
       guide_fasta0
-         .map { tuple( it[1].name, it[0] ) }
-         .combine( reverse_complement.out, by:0 )
+         .map { it[-1..0] }
+         .combine( reverse_complement.out, by: 0 )
          .map { it[1..-1] }
-         .set { guide_fasta }
+         .unique()
+         | set { guide_fasta }
 
    }
    else {  // pass through
@@ -313,15 +366,33 @@ workflow {
 
    if ( params.use_umis ) {
 
-      umi_ch
-         .combine( 
-            trimmed, 
-            by: 0 
-         )  // sample_id, umi_pattern, reads 
-         .set { pre_umi }
-      pre_umi 
-         | UMITOOLS_EXTRACT  // sample_id, reads
-      UMITOOLS_EXTRACT.out.main.set { pre_demux }
+      if ( params.use_clone_bc ) {
+
+         UMItools_whitelist(
+            trimmed.combine( umi_ch, by: 0 ),
+            Channel.value( params.umi_error_cutoff ),
+         )
+            | set { whitelist }
+         
+      } else {
+
+         trimmed
+            .map { it[0] }
+            .unique()
+            .combine( Channel.of( file( "placeholder" ) ) )
+            .set { whitelist }
+
+      }
+
+      UMItools_extract(
+         trimmed
+            .combine( umi_ch, by: 0 )
+            .combine( whitelist, by: 0 ),
+         Channel.value( params.trim_qual ),
+         Channel.value( params.use_clone_bc ),
+      )
+      UMItools_extract.out.main
+         .set { pre_demux }
 
    } else {
 
@@ -329,70 +400,80 @@ workflow {
 
    }
 
-   pre_demux  // sample_id, reads
-      .combine( guide_fasta, by: 0 )   // sample_id, reads, guide_fasta
-      | count_guides_with_cutadapt  // sample_id, reads
+   count_guides_with_cutadapt(
+      pre_demux  // sample_id, reads
+         .combine( guide_fasta, by: 0 ).unique(),   // sample_id, reads, guide_fasta
+      Channel.value( params.allow_guide_errors ),
+   )
+
+   count_guides_with_cutadapt.out.main 
+      | fastq2tab  // sample_id, tab
+      | count_tab
    
    if ( params.use_umis ) {
 
-      count_guides_with_cutadapt.out.main 
-         | FASTQ2TAB  // sample_id, tab
-         | UMItools_count_tab  // sample_id, counts
+      UMItools_count_tab(
+         fastq2tab.out,
+         Channel.value( params.umi_method ),
+         Channel.value( params.use_clone_bc ),
+      )
       UMItools_count_tab.out.main
-         | plot_UMI_distributions
-      FASTQ2TAB.out 
-         | READS_PER_UMI_AND_PER_GUIDE  // sample_id, per_umi, per_guide
-      UMItools_count_tab.out.main
-         .set { guide_counts }
+         .combine( count_tab.out, by: 0 )
+         | join_umi_and_read_counts
+         | set { guide_counts }
 
    } else {
 
-      COUNTS_PER_GUIDE(
-         count_guides_with_cutadapt.out.main
-         .combine( guide_fasta, by: 0 ),  // sample_id, reads, guide_fasta
-         Channel.value( params.guide_name ),
-      )
-         | set { guide_counts }
+      count_tab.out
+         .set { guide_counts }
          
    }
 
+   guide_counts | plot_count_distributions
    ANNOTATE_COUNTS_WITH_GENOME_FEATURES(
       gff_table  // genome_acc, pam, guide_tsv
          .map { tuple( it[0], it[2] ) }  // genome_acc, guide_tsv
+         .unique()
          .combine( 
-            genome_pam_ch.map { it[1..0] }, 
+            genome_pam_ch
+               .map { it[1..0] }
+               .unique(), 
             by: 0,
          )  // genome_acc, guide_tsv, sample_id
          .map { it[2..1] }  // sample_id, guide_tsv
+         .unique()
          .combine( guide_counts, by: 0 ),
       Channel.value( params.guide_name ),
    )
    
 
    if ( params.do_fitness ) {
-      csv_ch
-         .map { 
-            [ it.sample_id, it.ref_guide, it.ref_timepoint ] +
-            it.findAll { k, v -> k.startsWith( "condition_" ) }
-         }
-         .set { conditions_ch }
-      STACK_JOIN_CONDITIONS( 
-         guide_counts
-            .map { [ it[1] ] }
-            .collect(),
-         conditions_ch,
-      )  
-      | FITNESS
-      JOIN_GFF(FITNESS.out, gff_table)
-      PLOT_FITNESS(JOIN_GFF.out, essential_ch)
+      
+      guide_counts
+         .combine( sample2expt, by: 0 )
+         .map { tuple( it[-1], it[1] ) }
+         .groupTuple( by: 0 )
+         | stack_tables
+      calculate_relative_fitness(
+         stack_tables.out,
+         Channel.value( file( "${params.sample_sheet}" ) ),
+         Channel.value( params.growth ? file( "${params.growth}" ) : file( "placeholder" ) ),
+         Channel.value( params.guide_name ),
+         Channel.value( params.reference_guide ),
+         Channel.value( params.use_umis ),
+         Channel.value( !params.growth && params.use_spike ),
+         Channel.value( params.timepoint_column ),
+         Channel.value( params.concentration_column ),
+      )
+      // JOIN_GFF(calculate_relative_fitness.out.table, gff_table)
+      // PLOT_FITNESS(JOIN_GFF.out, essential_ch)
    }
 
    trim_logs
       .concat(
          fastQC.out.logs,
-         count_guides_with_cutadapt.out.logs,
+         // count_guides_with_cutadapt.out.logs,
       )
-      .map { it[-1] }
       .flatten()
       .unique()
       .collect()
@@ -400,164 +481,6 @@ workflow {
 
 }
 
-process FASTQ2TAB {
-
-   tag "${id}"
-
-   publishDir( 
-        "${params.outputs}/counts", 
-        mode: 'copy',
-        saveAs: { "${id}.${it}" },
-    )
-
-   input:
-   tuple val( id ), path( fastqs )
-
-   output:
-   tuple val( id ), path( "tab.tsv" )
-
-   script:
-   """
-   zcat ${fastqs[0]} \
-      | awk '(NR + 3) % 4 == 0' \
-      | tr ' ' \$'\t' \
-      | cut -f1-2 \
-      | sort -k2 \
-      > tab.tsv
-
-   """
-}
-
-process PLOT_READS_VS_UMIS {
-
-   tag "${id}"
-
-   publishDir( 
-        "${params.outputs}/plot-counts", 
-        mode: 'copy',
-        saveAs: { "${id}.${it}" },
-    )
-
-   input:
-   tuple val( id ), path( guide_umi_counts )
-
-   output:
-   tuple val( id ), path( "umi-vs-reads.png" )
-
-   script:
-   """
-   #!/usr/bin/env python
-
-   from carabiner.mpl import figsaver, scattergrid
-   import pandas as pd
-   
-   df = pd.read_csv(
-      "${guide_umi_counts}", 
-      sep='\\t',
-   ) 
-
-   fig, axes = scattergrid(
-      df,
-      grid_columns=["read_count", "umi_count"],
-      log=["read_count", "umi_count"]
-   )
-   figsaver()(
-      fig=fig,
-      name='umi-vs-reads',
-   )
-   
-   """
-}
-
-
-process READS_PER_UMI_AND_PER_GUIDE {
-
-   tag "${id}"
-
-   publishDir( 
-        "${params.outputs}/counts", 
-        mode: 'copy',
-      //   saveAs: { "${id}.${it}" },
-    )
-
-   input:
-   tuple val( id ), path( tabfile )
-
-   output:
-   tuple val( id ), path( "*.umi.tsv" ), path( "*.guide_name.tsv" )
-
-   script:
-   """
-   cut -f1 ${tabfile} | cut -d _ -f2 > umi.tsv
-   cut -f2 ${tabfile} > guide_name.tsv
-
-   for f in umi.tsv guide_name.tsv
-   do
-      BASENAME=\$(basename \$f .tsv)
-      NLINES=\$(cat \$f | wc -l)
-
-      printf 'sample_id\\t'\$BASENAME'\\t'\$BASENAME'_read_count\\n' \
-         > ${sample_id}.\$BASENAME.tsv
-
-      sort \$f | uniq -c \
-         | awk -F' ' -v OFS=\$'\\t' '{ print "${sample_id}", \$2, \$1 }' \
-         | sort -k3 -n \
-         >> ${sample_id}.\$BASENAME.tsv
-   done
-
-   """
-}
-
-
-process COUNTS_PER_GUIDE {
-
-   tag "${id}"
-
-   publishDir( 
-        "${params.outputs}/counts", 
-        mode: 'copy',
-        saveAs: { "${id}.${it}" },
-    )
-
-   input:
-   tuple val( id ), path( fastqs ), path( fastas )
-   val guide_name
-
-   output:
-   tuple val( id ), path( "counts.tsv" )
-
-   script:
-   """
-   printf '${guide_name}\\tsample_id\\tguide_count\\n' \
-      > counts.tsv
-
-   zcat ${fastqs} \
-      | awk '(NR + 3) % 4 == 0' \
-      | tr ' ' \$'\\t' \
-      | cut -f2 \
-      | sort -k1 \
-      | uniq -c \
-      | awk -F' ' -v OFS='\\t' -v id="${id}" \
-         '{ print \$2, id, \$1 }' \
-      | sort -k1 \
-      > counts0.tsv
-
-   grep '^>' ${fastas} \
-      | cut -d'>' -f2 \
-      | tr -d ' ' \
-      | sort -u \
-      > guide-names.txt
-
-   join -j 1 -a 1 -t\$'\\t' \
-      guide-names.txt counts0.tsv  \
-      | tr ' ' \$'\\t' \
-      | awk -F '\\t' -v OFS='\\t' -v id="${id}" \
-         'NF == 1 { print \$0, id, 0 }; NF > 1' \
-      | sort -k4 -n \
-      >> counts.tsv
-
-   """
-}
 
 // stack count TSV files and merge the condition table
 process STACK_JOIN_CONDITIONS {
@@ -574,7 +497,7 @@ process STACK_JOIN_CONDITIONS {
    )
 
    input:
-   path 'counts*.in.tsv'
+   path '??/*'
    path conditions
 
    output:
@@ -582,15 +505,18 @@ process STACK_JOIN_CONDITIONS {
 
    script:
    """
-   for f in counts*.in.tsv
+   files=(??/*)
+   for f in "\${files[@]}"
    do
-      cat \$f \
-      | python ${projectDir}/bin/join.py ${conditions} "," \
-      > \$f.joined.tsv
+      python ${projectDir}/bin/join.py "${conditions}" "," \
+      < "\$f" \
+      > "\$f.joined.tsv"
    done
 
-   head -n1 counts1.in.tsv.joined.tsv \
-   | cat - <(tail -q -n+2 counts*.joined.tsv) \
+   outputs=(*.joined.tsv)
+
+   head -n1 "\${outputs[0]}" \
+   | cat - <(tail -q -n+2 "\${outputs[@]}") \
    > counts.tsv
 
    """
