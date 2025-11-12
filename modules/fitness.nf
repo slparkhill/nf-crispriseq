@@ -91,37 +91,37 @@ process calculate_relative_fitness {
 
 
 // Use `crispin` to plot fitness 
-process PLOT_FITNESS {
-   tag{"${fitted}"}
+// process PLOT_FITNESS {
+//    tag{"${fitted}"}
 
-   label 'big_mem'
+//    label 'big_mem'
 
-   publishDir( model_o, 
-               mode: 'copy' )
+//    publishDir( model_o, 
+//                mode: 'copy' )
 
-   input:
-   path fit_params 
-   path fitted 
-   path essentials 
+//    input:
+//    path fit_params 
+//    path fitted 
+//    path essentials 
 
-   output:
-   path "*.png"
+//    output:
+//    path "*.png"
 
-   script:
-   """
-   guideplot \
-      --fitness fitness_params-guide_name-annotated.tsv \
-      --expansion fitness_params-exp_group.tsv \
-      --essentials ${essentials} \
-      --essential_calls ${params.essential_call} \
-      --essential_scores ${params.essential_score} \
-      --fitted ${fitted} \
-      --reference "${params.reference}" \
-      --initial "${params.initial}" \
-      --control_column "${params.control_column}" \
-      --negative ${params.negative} \
-      --count guide_count \
-      --format TSV \
-      -o fitness
-   """
+//    script:
+//    """
+//    guideplot \
+//       --fitness fitness_params-guide_name-annotated.tsv \
+//       --expansion fitness_params-exp_group.tsv \
+//       --essentials ${essentials} \
+//       --essential_calls ${params.essential_call} \
+//       --essential_scores ${params.essential_score} \
+//       --fitted ${fitted} \
+//       --reference "${params.reference}" \
+//       --initial "${params.initial}" \
+//       --control_column "${params.control_column}" \
+//       --negative ${params.negative} \
+//       --count guide_count \
+//       --format TSV \
+//       -o fitness
+//    """
 }
