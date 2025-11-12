@@ -41,10 +41,11 @@ process stack_tables {
 
 }
 
+
 process calculate_relative_fitness {
 
    tag "${id}"
-   label "big_time"
+   label 'big_time'
 
    publishDir(
       "${params.outputs}/fitness", 
@@ -124,4 +125,4 @@ process calculate_relative_fitness {
 //       --format TSV \
 //       -o fitness
 //    """
-}
+// }
