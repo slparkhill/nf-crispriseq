@@ -4,7 +4,7 @@ process UMItools_whitelist {
    label 'big_mem'
    time '24h'
 
-   tag "${sample_id}"
+   tag "${id}"
 
    publishDir( 
       "${params.outputs}/clone-barcodes", 

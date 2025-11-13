@@ -6,7 +6,7 @@ process fetch_genome_from_NCBI {
    publishDir( 
       "${params.outputs}/genome", 
       mode: 'copy',
-      saveAs: { "${id}.${it}" },
+      saveAs: { "${accession}.${it}" },
    )
 
    input:

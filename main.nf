@@ -139,6 +139,7 @@ include {
    join_umi_and_read_counts;
    UMItools_count_tab;
    UMItools_extract;
+   UMItools_whitelist;
 } from './modules/umitools.nf'
 
 workflow {
@@ -372,7 +373,9 @@ workflow {
             trimmed.combine( umi_ch, by: 0 ),
             Channel.value( params.umi_error_cutoff ),
          )
-            | set { whitelist }
+         
+         UMItools_whitelist.out.main
+            .set { whitelist }
          
       } else {
 
