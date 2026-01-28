@@ -17,7 +17,7 @@ dependencies:
     - conda-forge::pigz
     - conda-forge::unzip
     - pip:
-        - "git+https://github.com/scbirlab/crispio.git@fitness#egg=crispio[fit_cuda_local]"
+        - "crispio[fit_cuda_local]>=0.0.4"
         - 'carabiner-tools[mpl,pd]>=0.0.4'
         - 'cutadapt>=5.0'
         - 'multiqc>=1.27'
