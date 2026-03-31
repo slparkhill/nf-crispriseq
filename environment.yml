@@ -11,7 +11,7 @@ dependencies:
     - bioconda::seqtk
     - bioconda::sra-tools
     - pip:
-        - "git+https://github.com/scbirlab/crispio.git@fitness#egg=crispio[fit_cuda12_local]"
+        - "crispio[fit_cuda12_local]@git+https://github.com/scbirlab/crispio.git@fitness"
         - 'carabiner-tools[mpl,pd]==0.0.3.post1'
         - 'cutadapt==5.0'
         - 'multiqc==1.21'
